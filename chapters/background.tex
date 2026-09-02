@@ -1,2 +1,154 @@
 \chapter{Theoretical Background}
+\label{ch:background}
 
+\section{Theoretical Background}
+
+% This section will contain subsections on:
+% - Tool use in LLMs
+% - Interpretability and probing
+% - Linear representation hypothesis
+% - Activation steering
+% - Tool selection and confusion
+
+\section{Related Work}
+
+This section reviews the literature on tool selection in language model agents, organized around the chain of evidence that leads to this thesis.
+We first establish that tool selection is fragile and driven by surface features of tool specifications.
+We then examine work that reads tool-related information from the internal representations of models.
+Next we review the conflicting evidence on which specification component drives selection errors.
+We close with the methodological controls that probing experiments require, and state the gap that the present work addresses.
+
+\subsection{Tool Selection is Fragile}
+
+A growing body of work shows that tool selection in LLM agents is sensitive to surface features of tool specifications rather than their actual functionality.
+\textcite{sneh2025tooltweak} introduced ToolTweak, an adversarial attack that iteratively rewrites a tool's name and description to increase its selection rate.
+The attack follows the PAIR paradigm, where an attacker model proposes new metadata, the victim model is evaluated on a fixed set of queries, and the measured selection rate feeds back into the next proposal.
+Across six models, ToolTweak raises selection rates from a baseline near 20\% to as high as 81.6\% on DeepSeek, with substantial transferability between open-source and closed-source models.
+Two findings from that work matter directly for this thesis.
+First, on the Berkeley Function Calling Leaderboard, two identical tools differing only by a numeric suffix received drastically different selection rates, which the authors interpret as ordinality in names implicitly signaling a ranking.
+Second, parameter schema complexity affected how usable a tool was to the model, but the authors explicitly left a controlled study of schema effects to future work.
+\\
+
+\textcite{blankenstein2025biasbusters} conducted the most systematic study of tool-selection bias to date, evaluating seven LLMs on a benchmark of 10 clusters, each containing 5 functionally equivalent APIs and 100 queries.
+They quantify bias as the total variation distance between the empirical selection distribution and the uniform distribution, measured both per API and per list position, and find that all tested models exhibit substantial bias, with combined metrics around 0.3 to 0.4.
+Their perturbation experiments establish a clear hierarchy among specification components.
+Scrambling descriptions and parameters together produces the largest reliable shift in selection (mean TV distance 0.450 for Gemini), scrambling the description of the most-selected tool follows at 0.419, and swapping descriptions between tools still meaningfully steers choices at 0.338.
+Name-only perturbations are smaller and have higher variance, and parameter-only perturbations are the least impactful.
+Their feature analysis identifies semantic similarity between query and description as the strongest single predictor of selection, though a linear model over seven features explains less than 40\% of variance.
+They further show that biased continued pre-training on 3.5M tokens saturated with one endpoint raises that endpoint's selection share from 0.6\% to 12.2\%, demonstrating that pre-training exposure plants durable but not dominant preferences.
+\\
+
+\textcite{lu2024toolsandbox} built ToolSandbox, a stateful, conversational tool-use benchmark, and included controlled ablations over specification components that are directly relevant here.
+For GPT-4o, scrambling tool descriptions lowers the average task score from 73.0 to 69.3, while scrambling tool names leaves it nearly unchanged at 72.4, and scrambling argument descriptions or argument types has intermediate effects.
+The pattern is model-dependent, since GPT-4 actually improves under name scrambling, from 64.3 to 69.7, and the authors conclude that different models attend to different components.
+Their ablations vary one component at a time and measure aggregate task accuracy, so they cannot reveal how components interact or which pairs of tools become confusable as a result.
+\\
+
+Together, these studies establish that selection behavior is driven by surface metadata, that the effect is reproducible across model families, and that the influence of the three specification components is not uniform.
+However, all three measure selection share or task accuracy aggregated over a tool set.
+None of them asks whether a specific pair of tools is confused with each other, at what rate, or why.
+A tool can be systematically over-selected without being confusable with any particular sibling, and preference bias of this kind is a different quantity from pairwise confusability.
+
+\subsection{Internal Representations of Tool Selection}
+
+A separate line of work asks what the model knows internally when it selects a tool.
+\textcite{sun2026when2tool} probed pre-generation hidden states to predict whether a tool call is necessary at all.
+Their benchmark, When2Tool, spans 18 environments in three categories of tool necessity, with controlled difficulty levels that create a clean decision boundary between tasks the model can and cannot solve directly.
+A logistic regression probe on the last-input-token hidden state, with all layers concatenated, predicts tool necessity with AUROC 0.89 to 0.96 across six models from the Qwen3 and Llama families.
+The signal persists even in models whose explicit reasoning about tool necessity collapses behaviorally, which shows that representation-level knowledge exists independently of the model's ability to act on it during generation.
+Their Probe\&Prefill method reads the probe output and prefills a steering sentence, reducing tool calls by 48\% at a cost of 1.7\% accuracy.
+The probe target in this work is binary necessity, meaning whether to call a tool at all, not the identity of the tool being called.
+\\
+
+The closest prior work to this thesis is \textcite{wu2026linearly}, who showed that the choice of tool is carried by a single direction in activation space, with one direction per pair of tools.
+Their method computes mean residual-stream activations per tool from two or three queries, takes the normalized difference between two tool means as a steering direction, and adds it at the second-to-last layer during generation.
+This intervention switches the selected tool at 83 to 100\% accuracy on 4B and larger instruction-tuned models across Gemma 3, Qwen 3, and Llama 3.1 families, on both a synthetic 15-tool benchmark and the real-API $\tau$-bench airline benchmark.
+A multinomial probe trained on pre-emission residual states reads which tool the model will call at 61 to 89\% top-1 accuracy even within a single domain of 14 airline tools, ruling out the explanation that the probe merely detects topic.
+Most relevant to our central question, they report that queries where the model is unsure between two tools, measured by a small cosine gap between the top-1 and top-2 tool means, fail 21 times more often than queries where the model is confident.
+\\
+
+Three properties of their design define the space this thesis occupies.
+First, their uncertainty analysis is per query and pooled across queries into quartiles.
+They never compute a separability score for a specific pair of tools, and they never regress a pair's empirical confusion rate on its separability.
+Second, they test no surface-similarity baselines, so it remains unknown whether internal geometry adds predictive power beyond what string overlap or sentence-embedding similarity of the specifications already provides.
+Third, their steering fails exactly where confusion is worst, achieving 0\% switch rate on a set of near-synonymous sports APIs, which they attribute to the model being unable to distinguish the tools at all.
+That failure mode is precisely the phenomenon this thesis aims to measure and predict.
+\\
+
+Three further papers probe tool-related information from hidden states without touching tool identity.
+\textcite{healy2026internal} detect tool-calling hallucinations by training a small classifier on final-layer hidden states taken at three positions of the generated call, namely the function-name token, the mean-pooled argument tokens, and the closing delimiter.
+Their framework achieves up to 86.4\% accuracy in distinguishing correct from hallucinated calls on the Glaive function-calling dataset, with labels generated automatically by masking the reference call and comparing the model's re-prediction against it.
+Their classification target is a binary correct-versus-hallucinated label, so the probe learns that something went wrong without decoding which tool was involved or which alternative it was confused with.
+\textcite{sun2026dependency} probe the residual stream of Qwen3-32B for a different structure, the dependency edges between sequential tool calls in an agent trajectory, using a logistic edge probe over concatenated residual vectors of call pairs.
+Their signal tracks the abstract topology of the call graph rather than identifier values, and it concerns the temporal structure of a call sequence, not competition between candidate tools.
+\\
+
+\textcite{chen2026looking} takes an attention-based view.
+Measuring per-segment attention to each tool definition in the prompt, they find that on real BFCL failures the model attends most to the correct tool 80\% of the time, against 21\% chance, and still selects the wrong tool.
+Repairing the prompt by reordering or duplicating the correct tool recovers at most 23\% of failures, while readout-side interventions recover 59 to 91\%, localizing the failure at the decision readout rather than at input encoding.
+Their attention margin between the correct tool and the distractors predicts per-query failure competitively with a trained hidden-state probe on real benchmarks, and a causal attention-logit bias raises the probability of the correct tool monotonically.
+Like the other work in this subsection, their unit of analysis is the individual query, and the attention margin is a per-query confidence signal rather than a property of a tool pair.
+\\
+
+Taken together, this literature establishes that tool-related information is linearly present in hidden states, that the chosen tool is readable and steerable per pair, and that per-query uncertainty predicts per-query failure.
+What none of it provides is a measurement at the level of the tool pair: whether the representational distance between two specific tools, computed once from their specifications, predicts how often the model confuses them across queries, and whether that prediction beats cheap surface baselines.
+
+\subsection{Component Attribution and Conflicting Evidence}
+
+If pairwise confusion is to be reduced by rewriting specifications, the practical question is which component of the specification to rewrite.
+The published evidence on this question conflicts.
+On the side of names, \textcite{sneh2025tooltweak} found that identical tools differing only by a numeric suffix receive very different selection rates, and \textcite{faghih2025gaming} report that renaming tools toward pretraining-aligned names shifts usage by an order of magnitude on some models.
+On the side of descriptions, \textcite{blankenstein2025biasbusters} found name-only perturbations small and high-variance while description semantics were the primary discrimination cue, and the ToolSandbox ablations \cite{lu2024toolsandbox} show description scrambling costing GPT-4o more than six times as much accuracy as name scrambling.
+All of these studies vary one component at a time, so none of them can detect an interaction between components, and none of them measures confusion between a specific pair of sibling tools as the outcome.
+\\
+
+The parameter schema has received less attention in the selection literature, but one mechanistic result suggests it deserves equal standing.
+\textcite{liu2026structural} identified structural alignment bias, the tendency of models to invoke a tool whenever the attributes in the query can be validly assigned to its parameters, even when the tool is semantically irrelevant to the goal.
+On their SABEval dataset, which decouples structural alignment from semantic relevance through a polymorphism-inspired construction of sibling tools, tool invocation rates on irrelevant tools rise from under 0.2\% under random pairing to 41.9\% under structural alignment, and further to 90.4\% as the number of aligned attribute-parameter assignments grows.
+Their contrastive attention attribution method reveals two competing pathways inside the model, one performing semantic checking and one performing structural matching, and the relative strength of the two pathways drives the invocation decision.
+This result motivates treating the schema as a first-class factor in our attribution experiment, since a schema that admits a valid assignment may pull the model toward a sibling tool even when the name and description point elsewhere.
+\\
+
+\textcite{anand2026canary} take a behavioral diagnostic approach to the same family of questions with canary tools, planted probe tools engineered so that selecting them exposes a specific reasoning weakness.
+Their six-type taxonomy covers semantic decoys, parameter traps, capability mirages, prerequisite blindness, temporal decoys, and granularity traps, and their evaluation over eight models and 8,640 runs shows that susceptibility varies roughly 36-fold across models and does not track capability tier.
+Their work demonstrates the value of controlled, diagnostic tool design and provides a taxonomy of selection weaknesses, but it is purely behavioral, with no internal measurement and no attribution of confusion to specification components.
+\\
+
+The conflicting evidence, the one-factor-at-a-time designs, and the absence of a pairwise confusion outcome together motivate our factorial attribution experiment.
+We cross the three components, name, description, and schema, in a full factorial design over matched sibling pairs, which allows interaction terms to be estimated directly.
+Our expectation, stated in advance, is that no single component dominates, and that name overlap matters most when descriptions leave the boundary between two siblings unstated, while description quality matters most when names are already distinct.
+
+\subsection{Methodological Controls for Probing}
+
+Probing hidden states is an established but easily misused technique, and the design of our separability measurement follows directly from its documented failure modes.
+\textcite{alain2016understanding} introduced linear classifier probes as a measurement instrument for intermediate layers, showing that the linear separability of features increases monotonically with depth and framing probes as thermometers that measure a property of the model without influencing it.
+\textcite{belinkov2022probing} reviewed the framework critically, emphasizing that high probe accuracy alone is weak evidence, since a sufficiently expressive probe can memorize a mapping that the model never uses, and that control tasks and comparisons against baselines are necessary for interpretation.
+\\
+
+The most direct warning for our setting comes from \textcite{sahoo2026linear}, who trained linear probes on Qwen3-14B hidden states to distinguish deductive, inductive, and abductive reasoning across three benchmarks.
+The probes achieved 100\% cross-validated accuracy with well-separated geometry, but residualizing the source dataset, the number of answer options, and the response length collapsed accuracy to chance, and causal steering along the separating directions showed no functional effect.
+The entire separation was driven by format confounds correlated with the label.
+Applied to our setting, a probe that separates queries targeting tool A from queries targeting tool B may have learned stylistic register, query length, or lexical overlap with the tool name rather than tool identity.
+\\
+
+These results shape our measurement design in four concrete ways.
+First, all queries in the separability experiment share a single template frame with a varying slot fill, so the only systematic difference between the two classes is the target tool.
+Second, extraction is balanced across tool-list positions, since activations are position-sensitive and an unbalanced design would let the probe learn list position.
+Third, we report both raw separability and separability residualized against query length, token count, and lexical overlap with the tool name, and we state explicitly what each quantity licenses.
+Fourth, every probe result is accompanied by a permutation baseline with shuffled labels, following the control-task tradition that Belinkov's review describes.
+
+\subsection{The Gap}
+
+The literature establishes four premises.
+Surface metadata causally drives selection \cite{sneh2025tooltweak}.
+Selection bias is reproducible across model families \cite{blankenstein2025biasbusters}.
+Tool-related decisions, including both necessity and identity, are linearly decodable from hidden states \cite{sun2026when2tool,wu2026linearly}.
+Parameter schemas drive invocation through a structural-matching pathway that operates independently of semantic relevance \cite{liu2026structural}.
+\\
+
+What is missing is a measurement that connects these premises at the level of the tool pair.
+No prior work computes a separability statistic for a specific pair of tools and tests whether it predicts that pair's empirical confusion rate.
+No prior work compares an internal separability signal against surface-similarity and sentence-embedding baselines to establish whether internals add predictive power at all.
+No prior work attributes pairwise separability to the name, description, and schema components in a factorial design that can detect their interaction.
+And no prior work tests whether an attribution of this kind is actionable, by measuring whether edits guided by the attributed cause reduce confusion against a sham edit of equal effort.
+These four gaps define the four experiments of this thesis.
