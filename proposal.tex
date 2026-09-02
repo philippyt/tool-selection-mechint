@@ -1,0 +1,402 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{array}
+\usepackage{booktabs}
+
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt plus 1pt minus 1pt}
+
+\begin{document}
+
+{\Large\textbf{Predicting Tool Confusion from Representational Separability in LLM Agents}}
+
+\section*{1. Research question}
+
+\textbf{To what extent does the separation between two tool specifications in a language model's
+internal representation predict which of those tools the model will confuse when selecting?}
+
+The four experiments form one chain. First establish what the model actually confuses, then check
+whether that is visible internally, then find what causes it, and finally test whether the
+diagnosis helps in practice.
+
+\section*{2. Background}
+
+An LLM agent picks a tool by reading a list of specifications. Each specification consists of a
+name, a natural language description, and a parameter schema. When two specifications are similar,
+the model sometimes selects the wrong one. Nothing in the pipeline flags this, since the call
+still executes and returns data, so the error only surfaces downstream, if at all.
+
+A documented pair from Norkart's Adresse- og eiendomss{\o}k API, taken from its public developer
+documentation.
+
+\begin{verbatim}
+suggest_kommunecustom(query)
+  "Immediate responses based on the entered search text.
+   Not designed to handle typos."
+
+search_kommunecustom(query)
+  "More detailed information, with support for fuzzy searches
+   that allow simple typos."
+\end{verbatim}
+
+The two endpoint names differ by a single token, the description vocabulary overlaps almost
+fully, and both accept the same single text argument. Their behaviour differs in a way that
+matters. The strict variant stops matching when the query contains a typo, while the fuzzy
+variant absorbs it, so picking the wrong one changes results without raising an error.
+
+\subsection*{2.1 Established premises}
+
+Four published results are treated as premises rather than contributions.
+
+\begin{enumerate}
+    \item \textbf{Surface metadata causally drives selection.} Adversarial optimisation of a tool's name and
+    description raises its selection rate from roughly 20\% to as high as 81\% (ToolTweak,
+    2510.02554).
+    \item \textbf{Selection bias is consistent across models.} Metadata-driven tool-selection bias is
+    reproducible across frontier models (BiasBusters, 2510.00307).
+    \item \textbf{Tool-related decisions are decodable from hidden states.} A linear probe on the
+    last-input-token hidden state predicts whether a tool call is necessary with AUROC 0.89 to
+    0.96, exceeding the model's own verbalised reasoning (When2Tool, 2605.09252).
+    \item \textbf{Parameter schemas drive invocation independently of semantics.} Models invoke a tool
+    whenever query attributes can be validly assigned to its parameters, even when the tool does
+    not serve the goal. Contrastive attention attribution reveals competing semantic-checking and
+    structural-matching pathways (Structural Alignment Bias, 2604.11322, ACL 2026).
+\end{enumerate}
+
+\subsection*{2.2 The gap}
+
+A 2026 line of work has established that tool-related information is readable from hidden states.
+Wu et al.\ (2605.07990) showed that the choice of tool is carried by a linear direction, one
+direction per pair of tools, that probes trained on pre-generation states read which tool the
+model will call at 61 to 89\% top-1 accuracy within a single domain, and that queries where the
+model is unsure between two tools fail 21 times more often. Healy et al.\ (2601.05214) detect
+hallucinated tool calls from hidden states in the same forward pass, and Chen (2606.16364)
+localises selection failures to the decision readout rather than to attention over the tool list.
+
+None of this work measures pairwise confusability. Wu et al.\ measure uncertainty per query and
+pool across queries. They do not compute a separability score for a specific pair of tools, and
+they do not test whether that score predicts the pair's confusion rate beyond what string
+similarity or sentence embeddings already predict. Their unit of analysis is the query. Ours is
+the tool pair. Healy et al.\ classify calls as correct or hallucinated without decoding tool
+identity. Chen predicts per-query failure, not per-pair confusion. Premises (3) and (4) are both
+about invocation, meaning whether to call a tool at all. Premise (1) treats the specification as
+an optimisation target rather than a measurable object. Premise (2) concerns preference, which is
+a different quantity from pairwise confusability. A tool can be systematically over-selected
+without being confusable with any particular sibling.
+
+What is missing is a measurement of whether internal geometry predicts pairwise selection errors,
+and that measurement is the main goal of this thesis.
+
+\subsection*{2.3 Closest related work}
+
+\begin{tabular}{@{}L{3.2cm}L{5.9cm}L{6.2cm}@{}}
+\toprule
+\textbf{Work} & \textbf{What it does} & \textbf{Delta} \\
+\midrule
+Wu et al.\ (2605.07990) & Per-pair linear directions switch which tool the model picks, probes read which tool will be called, unsure queries fail 21x more often & Closest prior work. Anticipates RQ1. Uncertainty is measured per query and pooled, never per pair, and no surface-similarity baselines are tested. RQ2 is the pair-level, baseline-controlled version of their aggregate finding \\
+When2Tool (2605.09252) & Probes hidden states for \textbf{whether} a tool call is needed & Binary necessity, not \textbf{which} tool, and no pairwise measure \\
+Healy et al.\ (2601.05214) & Detects hallucinated tool calls from hidden states in one forward pass & Binary correct-versus-hallucinated classification, no identity decoding and no pairs \\
+Chen (2606.16364) & Shows models attend to the correct tool and still pick wrong, and predicts per-query failure from attention margins against lexical and probability baselines & Per-query failure prediction, not per-pair confusion, and no pairwise identity separability \\
+Tool-call dependency probing (2605.25310) & Linear probes decode dependency edges between sequential tool calls from the residual stream & Follows a call sequence over time, not identity separation between competing candidates, and no confusion prediction \\
+Structural Alignment Bias (2604.11322) & Mechanistic analysis of invoke-versus-refuse, with attention attribution & Invocation, not discrimination between candidates. Motivates the schema factor in Study 3 \\
+ToolTweak (2510.02554) & Adversarially optimises metadata to raise selection share & No representational measurement and no confusion prediction \\
+BiasBusters (2510.00307) & Tool preference bias and cross-model consistency, with metadata perturbations & Preference bias is not confusability, and the perturbations are one factor at a time with no interaction terms \\
+Canary Tools (2608.04719) & Six-type taxonomy of planted diagnostic tools that probe specific selection weaknesses & Behavioural decoy taxonomy, no internal measurement \\
+ToolSandbox (2408.04682) & Benchmark with name scrambling, description scrambling, and similarity-selected distractors & Scrambles one component at a time, reports task accuracy rather than pairwise confusion, and has no factorial crossing or interaction analysis \\
+\bottomrule
+\end{tabular}
+
+Experiment 3 is a partial replication and extension rather than a novel design. It is kept because it
+makes Experiment 2 measurement actionable, and because published evidence on the question
+conflicts. The novelty rests on RQ2.
+
+\subsection*{2.4 Why open weights are the right setting}
+
+The method needs access to model internals, which is exactly what self-hosting provides. Capable
+open-weight dense models now exist in a size range that runs comfortably in bf16 on modest
+hardware. For an organisation running its own model, the detector probes the same weights,
+tokeniser, and specifications that serve production, so no transfer assumption is involved.
+
+\section*{3. Research questions}
+
+\textbf{RQ1.} To what extent, and at what network depth, is the identity of the correct tool linearly
+decodable from a model's pre-generation hidden states?
+
+\textbf{RQ2 (central).} To what extent does pairwise representational separability between two tools
+predict the rate at which the model confuses them, relative to what surface-similarity and
+sentence-embedding baselines already predict?
+
+\textbf{RQ3.} To what extent is representational separability attributable to each component of a
+specification, meaning name, description, and parameter schema, and under what conditions does
+each dominate?
+
+The published evidence points in different directions. On the side of names, ToolTweak found that
+two identical tools differing only by a numeric suffix received very different selection rates,
+and PA-Tool (2510.07248) reports gains of up to 17\% from renaming tools to pretraining-aligned
+names. On the side of descriptions, BiasBusters found name-only perturbations small and
+high-variance while description semantics were the primary discrimination cue, and ToolSandbox's
+GPT-4o ablations dropped 3.7 points under description scrambling against 0.6 under name
+scrambling. We therefore expect no main effect of any single component. Instead we expect an
+interaction between name and description, where name overlap matters most when descriptions leave
+the boundary between two sibling tools unstated, and description quality matters most when the
+names are already distinct.
+
+\textbf{RQ4.} To what extent do specification edits guided by the RQ3 attribution reduce measured
+confusion on a real tool set, relative to a sham edit of equal effort on the same pair?
+
+\section*{4. Method}
+
+\subsection*{Experiment 1. Behavioural ground truth}
+
+We build a query set over the Norkart tool inventory in which every query has one unambiguous
+correct tool. Two independent annotators verify the labels. Inter-annotator agreement is
+reported, ambiguous queries are excluded, and the excluded count is reported alongside.
+
+The primary dependent variable is the probability mass assigned to each competing tool, taken
+from the tool-choice distribution on the same forward pass. Argmax selection accuracy is kept as
+a secondary metric because it is easy to interpret. Probability mass is the better construct.
+Argmax makes confusion a rare binary event and leaves most pair-level cells near zero, while
+probability mass is continuous and far better powered. A pair where the model puts 45\% on the
+wrong tool is confusable even when it happens to select correctly.
+
+Decoding settings are pinned before data collection. Greedy decoding, temperature 0, a fixed
+repeat count per query, and unconstrained JSON output parsed afterwards. Tool-list order is
+randomised per trial and reported as a covariate.
+
+\subsection*{Experiment 2. Representational separability and prediction (RQ1, RQ2)}
+
+Residual-stream activations are extracted at the final prompt token, across all layers, in bf16,
+with thinking disabled.
+
+\begin{enumerate}
+    \item \textbf{Decodability (RQ1).} Multiclass linear probe predicting the correct tool, swept across layers.
+    This step replicates and extends Wu et al.\ (2605.07990). The extension is the label. Their
+    probes predict which tool the model will call, while ours predict which tool is the correct
+    target, and the gap between the two is itself diagnostic of confusion.
+    \item \textbf{Pairwise separability (RQ2).} For each pair, a two-class probe separates queries targeting
+    one tool from queries targeting the other. The primary separability measure is the
+    cross-validated accuracy of that probe. Centroid cosine distance and a between/within-class
+    scatter ratio are reported alongside as descriptive support.
+    \item \textbf{Prediction.} Correlate separability against Experiment 1 confusion measure and test
+    incremental variance over the baselines in \S5.
+\end{enumerate}
+
+Three constraints address specific ways this measurement can go wrong.
+
+\begin{itemize}
+    \item \textbf{Template-matched queries.} A two-class probe trained on two different query subsets can
+    separate on stylistic register rather than tool identity. All Experiment 2 queries use a shared
+    frame with a varying slot fill, so the only systematic difference between subsets is the target
+    tool.
+    \item \textbf{Position-balanced extraction.} Activations are position-sensitive, so extraction runs are
+    balanced across tool-list positions. Without this, separability partly encodes list position
+    rather than tool identity.
+    \item \textbf{Raw and residualised separability both reported.} Residualising query length, token count,
+    and lexical overlap with the tool name is necessary because probe accuracy alone is not
+    evidence of internal structure. Recent work found probe separations collapsing to chance once
+    format confounds were removed (arXiv 2606.02907). Lexical overlap is also the mechanism RQ3
+    hypothesises, so residualising it away answers a different question. Raw separability answers
+    whether geometry is predictive. Residualised separability answers whether geometry adds
+    anything beyond strings. Both are reported, with what each licenses stated explicitly. A
+    permutation baseline with shuffled labels accompanies every probe result, and the primary
+    measurement is taken mid-stack with the full layer sweep reported.
+\end{itemize}
+
+\subsection*{Experiment 3. Component attribution (RQ3)}
+
+A factorial design over the three specification components, run on matched Norkart-domain pairs.
+
+\begin{tabular}{@{}L{2.8cm}L{5.9cm}L{6.5cm}@{}}
+\toprule
+\textbf{Factor} & \textbf{Level A} & \textbf{Level B} \\
+\midrule
+Name & shared stem (\texttt{eiendomsflater} / \texttt{eiendomskart}) & lexically disjoint (\texttt{eiendomsflater} / \texttt{ruteberegner}) \\
+Description & independent paraphrase & contrastive (states the boundary against the sibling) \\
+Parameter schema & identical arity and names & divergent arity or types \\
+\bottomrule
+\end{tabular}
+
+Dependent variables are the confusion measure and representational separability. Effect sizes
+come with confidence intervals. The name $\times$ description interaction is the pre-registered focus.
+The schema factor is motivated directly by the structural-matching pathway identified in premise
+(4).
+
+Name similarity is measured in each model's own token vocabulary rather than in characters, since
+the hypothesised mechanism is shared token prefixes.
+
+\textbf{Norwegian.} Norwegian compounds fragment differently under model tokenisers, which supplies
+natural variation in the name factor. This arm runs on Qwen3-14B only, because Granite 4.1 does
+not list Norwegian among its supported languages. Granite contributes to the English cells and to
+RQ1 and RQ2, not to the bilingual comparison.
+
+\subsection*{Experiment 4. Intervention (RQ4)}
+
+This experiment runs on Norkart's real tool set. The Experiment 2 detector flags risky pairs. For each
+flagged pair we produce two edits of matched length and effort. The guided edit targets whatever
+cause Experiment 3 attributes. The sham edit is an equally careful rewrite that does not target that
+cause. Every flagged pair is then measured under all three specifications, original, guided, and
+sham, in separate balanced trials with the condition order randomised.
+
+The rule that maps an Experiment 3 attribution to a concrete edit is fixed before Experiment 4 begins. A
+shared name stem leads to renaming toward a lexically distinct stem. A weak boundary leads to a
+contrastive description that states the boundary. Schema-driven confusion leads to divergent arity
+or types.
+
+Because every flagged pair serves as its own control, the design avoids the
+regression-to-the-mean objection that comparing flagged against unflagged pairs would invite.
+
+\section*{5. Evaluation}
+
+Three baselines are committed in advance.
+
+\begin{enumerate}
+    \item \textbf{String similarity.} Normalised edit distance and token-set overlap on names, computed in
+    the model's tokeniser vocabulary.
+    \item \textbf{Sentence embedding.} Cosine similarity of full specifications under a multilingual encoder.
+    \item \textbf{Output-side pair margin.} For each pair we take the queries in which one of the two tools
+    is the correct target and record how much probability mass lands on each of the two. A small
+    gap between the two masses marks the pair as confusable. This signal comes from the
+    tool-choice distribution alone and needs no internal access.
+\end{enumerate}
+
+The primary RQ2 metric is incremental variance explained over baselines 1 to 3, plus precision
+and recall of the top-k flagged pairs against the pairs that actually produce errors.
+
+\textbf{Sample size and power.} Queries per tool, trials per query, and a minimum-observation
+inclusion rule per pair are fixed before data collection. A power statement for the RQ3
+interaction is included, since detecting an interaction requires roughly four times the sample of
+a main effect of equal size, and this drives the design. The continuous confusion measure from
+Experiment 1 substantially reduces the required sample compared to a binary argmax outcome.
+
+\textbf{Statistical treatment.} Tool pairs are not independent because each tool appears in many
+pairs. Analyses therefore use mixed-effects models with crossed random intercepts per tool, or
+cluster-robust standard errors. Confusion proportions are modelled with beta-binomial or
+equivalent overdispersion handling.
+
+\textbf{Negative-result plan.} If the internal measures do not improve on baselines 1 to 3, the answer
+to RQ2 is that surface string overlap suffices and internals are unnecessary for this task.
+Experiments 3 and 4 still stand under that outcome, with the detector simply running on the cheaper
+signal. The thesis therefore produces a usable result under either answer to its central question.
+
+\section*{6. Models and materials}
+
+\subsection*{6.1 Tool inventory}
+
+Norkart's published services supply non-synthetic semantic overlap. Adresse- og eiendomss{\o}k
+(autocomplete, fuzzy, reverse geocoding), Eiendomsflater, Naboliste, Eiendom og Tinglysning,
+Bygning, Takgeometri og solinnstr\r{a}ling, Eiendomskart, Geografisk h{\o}yde, Ruteberegner,
+administrative units, and Bakgrunnskart.
+
+Confusable pairs available without construction.
+
+\begin{itemize}
+    \item \texttt{suggest\_kommunecustom} vs.\ \texttt{search\_kommunecustom}. Two documented endpoints of one service,
+    same single string input, overlapping description vocabulary, strict versus fuzzy matching
+    \item reverse geocoding vs.\ the text based modes of the same service. Overlapping intent, coordinate
+    input instead of text
+    \item \texttt{matrikkelenhet} / \texttt{grunneiendom} / \texttt{festegrunn} / \texttt{eierseksjon} / \texttt{anleggseiendom}. Legally
+    distinct cadastral objects with overlapping lexical form
+    \item \texttt{eiendomsflater} vs.\ \texttt{eiendomskart}. Two separate documented services, a one-token difference,
+    parcel attribute data versus property boundary map service
+\end{itemize}
+
+The experiment needs specifications, not data. No live API calls and no cadastral records are
+required. The object of study is which tool the model selects, not what it returns.
+
+\subsection*{6.2 Models}
+
+Models are chosen for measurement fidelity rather than maximum capability. They must be small
+enough to run in bf16, dense and standard enough for clean per-layer hidden-state extraction, and
+drawn from two families so the findings are not tied to one architecture.
+
+\begin{tabular}{@{}L{1.9cm}L{4.3cm}L{9.2cm}@{}}
+\toprule
+\textbf{Role} & \textbf{Model} & \textbf{Rationale} \\
+\midrule
+Primary A & Granite 4.1 8B (dense, Apache 2.0) & Strong function calling for its size, and no reasoning mode, matching \S6.3 \\
+Primary B & Qwen3-14B (dense, Apache 2.0) & Standard full-attention transformer for clean per-layer extraction, supports 119 languages including Norwegian Bokm{\aa}l and Nynorsk, carries the Norwegian arm of Study 3 \\
+Contingent & Qwen3-32B (dense, Apache 2.0) & Deployment-scale spot check, same dense architecture family as Primary B. Runs in bf16 on a single 80\,GB card at moderate context with hidden states offloaded per batch \\
+Appendix & One closed model with logprob access & Behavioural robustness only, no internal claim \\
+\bottomrule
+\end{tabular}
+
+All activation extraction runs in bf16. Quantised activations are never used for measurement,
+because quantisation noise falls directly on the small inter-tool distances that are the
+dependent variable.
+
+\subsection*{6.3 Inference mode}
+
+All internal measurement runs with thinking disabled. For Qwen3 this is set through the
+\texttt{enable\_thinking=False} flag in the chat template, since the model reasons by default.
+Granite 4.1 has no reasoning mode, so no setting is needed there. The probe assumes tool identity
+is resolved at the last prompt token. If a model reasons for thousands of tokens before
+selecting, the decision is made inside the trace and the probe location is invalid. Extending
+this analysis to reasoning models would require locating the decision point within the trace,
+which we state as future work.
+
+\section*{7. Contributions}
+
+\begin{enumerate}
+    \item \textbf{Primary.} To my knowledge, as of August 2026, this is the first work to measure
+    representational separability per tool pair and to test whether it predicts that pair's
+    confusion rate beyond surface-similarity, sentence-embedding, and output-margin baselines.
+    The closest prior work, Wu et al.\ (2605.07990), established that tool choice is linearly
+    readable and that uncertain queries fail more often, but measured uncertainty per query and
+    pooled across queries, with no per-pair separability statistic and no surface baselines. RQ2
+    is the pair-level, baseline-controlled analysis their aggregate finding suggests but does not
+    perform. RQ1 replicates their decodability result and extends it from will-call to
+    correct-target decoding.
+    \item Resolution of conflicting published evidence on whether names or descriptions dominate
+    confusability, framed as an interaction rather than a main effect.
+    \item Causal evidence, against a within-pair sham control, that attribution-guided edits reduce
+    selection errors.
+    \item An open-source design-time confusability detector returning ranked risk pairs with attributed
+    cause.
+    \item A public tool set and query set in the Norwegian cadastral domain.
+\end{enumerate}
+
+\section*{8. Principal risks}
+
+\begin{tabular}{@{}L{5.4cm}L{10.0cm}@{}}
+\toprule
+\textbf{Risk} & \textbf{Mitigation} \\
+\midrule
+Internal measures do not beat string baselines & Pre-committed negative-result framing (\S5), Experiments 3 and 4 stand alone \\
+Probe signal is a confound artefact & Template-matched queries, position balancing, residualisation, permutation baselines \\
+Sparse confusion matrix undermines correlations & Continuous probability-mass DV, inclusion rule and power statement fixed in advance \\
+A competing preprint appears mid-project & arXiv alerts from week 1, Experiment 4 and the Norkart tool set are not scoopable by benchmark-only work \\
+Qwen3-32B does not fit the 80\,GB card in bf16 & Contingent model only, falls back to a behavioural spot check at no cost to the chain \\
+Norkart access delayed & Experiments 1 to 3 run on specifications authored from public documentation \\
+\bottomrule
+\end{tabular}
+
+\section*{9. References}
+
+\begin{itemize}
+    \item Alain \& Bengio (2016). Understanding intermediate layers using linear classifier probes.
+    \item Belinkov (2022). Probing classifiers: promises, shortcomings, and advances.
+    \item Patil et al. (2023). Gorilla: large language model connected with massive APIs.
+    \item Qin et al. (2023). ToolLLM.
+    \item Yan et al. (2024). Berkeley Function Calling Leaderboard.
+    \item ToolSandbox (arXiv 2408.04682).
+    \item ToolTweak (arXiv 2510.02554).
+    \item BiasBusters (arXiv 2510.00307).
+    \item PA-Tool (arXiv 2510.07248).
+    \item Do LLMs know tool irrelevance? Structural alignment bias in tool invocations (arXiv 2604.11322).
+    \item LLM agents already know when to call tools (arXiv 2605.09252).
+    \item Tool-call dependency structure is linearly decodable in LLM agent residual streams (arXiv 2605.25310).
+    \item Tool calling is linearly readable and steerable in language models (arXiv 2605.07990).
+    \item Internal representations as indicators of hallucinations in agent tool selection (arXiv 2601.05214).
+    \item Looking is not picking: an attention-segment account of tool-selection failures in agents.
+    arXiv 2606.16364.
+    \item Linear probes detect task format, not reasoning mode (arXiv 2606.02907).
+    \item Diagnosing tool-selection reasoning with canary tools (arXiv 2608.04719).
+    \item IBM Research (2026). Granite 4.1 family of models.
+    \item Norkart AS. Datatjenester API documentation.
+\end{itemize}
+
+\end{document}
