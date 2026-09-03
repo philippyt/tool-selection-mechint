@@ -23,7 +23,7 @@ search_kommunecustom(query)
    that allow simple typos."
 \end{verbatim}
 
-The names differ by one word. The descriptions overlap in vocabulary. Both accept a single text argument.
+The names differ by one word, the descriptions overlap in vocabulary, and both accept a single text argument.
 Yet the strict variant stops matching when the query contains a typo, while the fuzzy variant absorbs it.
 An agent that selects the wrong one will return wrong results without raising an error.
 Across a catalog of many overlapping services, the number of potentially confusable pairs grows combinatorially. \\
@@ -34,8 +34,7 @@ These studies establish that tool selection is fragile and driven by surface fea
 What they do not establish is whether confusion between two specific tools is predictable.
 A developer who writes two specifications can read them and judge them distinct, but has no way to check whether the model internally keeps them apart, short of running expensive black-box evaluations over many queries. \\
 
-This thesis asks whether the separation between two tool specifications in a language model's internal representation predicts which of those tools the model will confuse when selecting.
-The core claim is predictive.
+This thesis asks whether the separation between two tool specifications in a language model's internal representation predicts which of those tools the model will confuse when selecting. The core claim is predictive.
 If pairwise separability forecasts pairwise confusion, then specification quality becomes measurable rather than assumed.
 The internal analysis also explains what drives the confusion, by attributing separability to the name, description, and schema components of the specification.
 That attribution produces specification-writing guidance that any developer can apply, regardless of whether they can read model internals.
