@@ -1,0 +1,1 @@
+pdf render: https://philippyt.github.io/tool-selection-mechint/main.pdf
