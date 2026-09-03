@@ -1,5 +1,7 @@
 build/
 *.pdf
+# Figure sources must be committed even though PDFs are otherwise ignored.
+!figures/**/*.pdf
 *.aux
 *.bbl
 *.bcf
