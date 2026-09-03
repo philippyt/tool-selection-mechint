@@ -1,8 +1,11 @@
 \chapter{Introduction}
 \label{ch:intro}
 
-Large language models are increasingly deployed as agents that act on the world through external services. An agent receives a user request, selects a tool from a list of available options, and invokes it. The tool might query a database, update a customer record, or fetch live sensor data. When the agent picks the wrong tool, the consequences are not always visible. The call executes, returns data, and the error only surfaces later, if at all.
-\\
+Large language models are increasingly deployed as agents that act on the world through external services.
+An agent receives a user request, selects a tool from a list of available options, and invokes it.
+The tool might query a database, update a customer record, or fetch live sensor data.
+When the agent picks the wrong tool, the consequences are not always visible.
+The call executes, returns data, and the error only surfaces later, if at all. \\
 
 This thesis studies one specific failure mode of such agents, the confusion between two similar tools, and asks whether it can be predicted from the model's internal representations before the model ever generates a response.
 
@@ -20,70 +23,83 @@ search_kommunecustom(query)
    that allow simple typos."
 \end{verbatim}
 
-The names differ by one word. The descriptions overlap in vocabulary. Both accept a single text argument. Yet the strict variant stops matching when the query contains a typo, while the fuzzy variant absorbs it. An agent that selects the wrong one will return wrong results without raising an error. Across a catalog of many overlapping services, the number of potentially confusable pairs grows combinatorially.
-\\
+The names differ by one word. The descriptions overlap in vocabulary. Both accept a single text argument.
+Yet the strict variant stops matching when the query contains a typo, while the fuzzy variant absorbs it.
+An agent that selects the wrong one will return wrong results without raising an error.
+Across a catalog of many overlapping services, the number of potentially confusable pairs grows combinatorially. \\
 
-This is not a hypothetical problem. ToolTweak \cite{sneh2025tooltweak} showed that adversarially optimizing a tool's name and description can raise its selection rate from 20\% to 81\%. BiasBusters \cite{blankenstein2025biasbusters} found systematic selection biases across seven frontier models, with models fixating on specific providers or favoring tools that appear earlier in the list. These studies establish that tool selection is fragile and driven by surface features. What they do not establish is whether confusion between two specific tools is predictable. A developer who writes two specifications can read them and judge them distinct, but has no way to check whether the model internally keeps them apart, short of running expensive black-box evaluations over many queries.
-\\
+This is not a hypothetical problem.
+ToolTweak \cite{sneh2025tooltweak} showed that adversarially optimizing a tool's name and description can raise its selection rate from 20\% to 81\%. BiasBusters \cite{blankenstein2025biasbusters} found systematic selection biases across seven models, with models fixating on specific providers or favoring tools that appear earlier in the list.
+These studies establish that tool selection is fragile and driven by surface features.
+What they do not establish is whether confusion between two specific tools is predictable.
+A developer who writes two specifications can read them and judge them distinct, but has no way to check whether the model internally keeps them apart, short of running expensive black-box evaluations over many queries. \\
 
-This thesis asks whether the separation between two tool specifications in a language model's internal representation predicts which of those tools the model will confuse when selecting. The core claim is predictive. If pairwise separability forecasts pairwise confusion, then specification quality becomes measurable rather than assumed. The internal analysis also explains what drives the confusion, by attributing separability to the name, description, and schema components of the specification. That attribution produces specification-writing guidance that any developer can apply, regardless of whether they can read model internals.
+This thesis asks whether the separation between two tool specifications in a language model's internal representation predicts which of those tools the model will confuse when selecting.
+The core claim is predictive.
+If pairwise separability forecasts pairwise confusion, then specification quality becomes measurable rather than assumed.
+The internal analysis also explains what drives the confusion, by attributing separability to the name, description, and schema components of the specification.
+That attribution produces specification-writing guidance that any developer can apply, regardless of whether they can read model internals.
 
 \section{Thesis Objective}
 
-The main objective of this thesis is to measure whether the separation between two tool specifications in a language model's internal representation predicts which of those tools the model will confuse when selecting.
-\\
+The main objective of this thesis is to measure whether the separation between two tool specifications in a language model's internal representation predicts which of those tools the model will confuse when selecting. \\
 
-The work proceeds as a chain of four experiments. The first establishes the behavioral ground truth, measuring which tool pairs the model actually confuses on a real tool inventory. The second extracts internal representations and measures whether pairwise separability predicts the observed confusion, against surface-similarity and sentence-embedding baselines. The third attributes separability to the components of the specification through a factorial design over names, descriptions, and parameter schemas. The fourth tests whether the attribution is actionable, by measuring whether edits guided by the attributed cause reduce confusion against a sham edit of equal effort.
-\\
+The work proceeds as a chain of four experiments.
+The first establishes the behavioral ground truth, measuring which tool pairs the model actually confuses on a real tool inventory.
+The second extracts internal representations and measures whether pairwise separability predicts the observed confusion, against string similarity, sentence embedding similarity and the output side pair margin.
+The third attributes separability to the components of the specification through a factorial design over names, descriptions, and parameter schemas.
+The fourth tests whether the attribution is actionable, by measuring whether edits guided by the attributed cause reduce confusion against a sham edit of equal effort. \\
 
 More specifically, the thesis asks four questions:
 
 \begin{enumerate}
     \item \textbf{RQ1.} To what extent, and at what network depth, is the identity of the correct tool linearly decodable from a model's pre-generation hidden states?
 
-    \item \textbf{RQ2.} To what extent does pairwise representational separability between two tools predict the rate at which the model confuses them, relative to what surface-similarity and sentence-embedding baselines already predict?
+    \item \textbf{RQ2.} To what extent does pairwise representational separability between two tools predict the rate at which the model confuses them, relative to what string similarity, sentence embedding similarity and output side baselines already predict?
 
     \item \textbf{RQ3.} To what extent is representational separability attributable to each component of a specification, meaning name, description, and parameter schema, and under what conditions does each dominate?
 
     \item \textbf{RQ4.} To what extent do specification edits guided by the RQ3 attribution reduce measured confusion on a real tool set, relative to a sham edit of equal effort on the same pair?
 \end{enumerate}
 
-The central question is RQ2. RQ1 establishes that the measurement is possible at all. RQ3 explains the measurement. RQ4 tests whether the explanation is useful in practice. A negative answer to RQ2 is still informative, since it would mean surface string overlap suffices for this task and internal access is unnecessary.
+The central question is RQ2.
+RQ1 establishes that the measurement is possible at all.
+RQ3 explains the measurement.
+RQ4 tests whether the explanation is useful in practice.
+A negative answer to RQ2 is still informative, since it would mean cheap baselines suffice for this task and internal access is unnecessary.
 
 \section{Thesis Contributions}
+This thesis makes five contributions. \\
 
-This thesis makes four contributions.
-\\
+First, to our knowledge, it provides the first systematic measurement of pairwise tool-identity separability in language model hidden states, and tests whether that separability predicts real selection errors beyond string similarity, sentence embedding similarity and output side baselines.
+Wu et al. \cite{wu2026linearly} established that tool choice is linearly readable and steerable, but measured uncertainty per query and pooled across queries.
+They did not compute a separability score for a specific pair of tools and test whether it predicts that pair's confusion rate.
+This thesis fills that gap. \\
 
-First, it provides the first systematic measurement of pairwise tool-identity separability in language model hidden states, and tests whether that separability predicts real selection errors beyond surface-similarity baselines. Wu et al. \cite{wu2026linearly} established that tool choice is linearly readable and steerable, but measured uncertainty per query and pooled across queries. They did not compute a separability score for a specific pair of tools and test whether it predicts that pair's confusion rate. This thesis fills that gap.
-\\
+Second, it resolves conflicting published evidence on whether names or descriptions dominate confusability.
+ToolTweak \cite{sneh2025tooltweak} found that two identical tools differing only by a numeric suffix received very different selection rates.
+BiasBusters \cite{blankenstein2025biasbusters} found name-only perturbations small and high-variance while description semantics were the primary discrimination cue.
+ToolSandbox \cite{lu2024toolsandbox} found GPT-4o accuracy dropped 3.7 points under description scrambling against 0.6 under name scrambling.
+This thesis frames the conflict as an interaction rather than a main effect and tests it with a factorial design. \\
 
-Second, it resolves conflicting published evidence on whether names or descriptions dominate confusability. ToolTweak \cite{sneh2025tooltweak} found that two identical tools differing only by a numeric suffix received very different selection rates. BiasBusters \cite{blankenstein2025biasbusters} found name-only perturbations small and high-variance while description semantics were the primary discrimination cue. ToolSandbox \cite{lu2024toolsandbox} found GPT-4o accuracy dropped 3.7 points under description scrambling against 0.6 under name scrambling. This thesis frames the conflict as an interaction rather than a main effect and tests it with a factorial design.
-\\
+Third, it provides causal evidence, against a within-pair sham control, that attribution-guided edits reduce selection errors. The sham edit is an equally careful rewrite that does not target the attributed cause. This design avoids regression-to-the-mean objections. \\
 
-Third, it provides causal evidence, against a within-pair sham control, that attribution-guided edits reduce selection errors. The sham edit is an equally careful rewrite that does not target the attributed cause. This design avoids regression-to-the-mean objections.
-\\
+Fourth, it releases an open-source design-time confusability detector that returns ranked risk pairs with attributed cause. \\
 
-Fourth, it releases an open-source design-time confusability detector that returns ranked risk pairs with attributed cause, along with a public tool set and query set in the Norwegian cadastral domain.
+Fifth, it releases a public tool set and query set in the Norwegian cadastral domain.
 
 \section{Thesis Outline}
 
-The remainder of this thesis is organized as follows.
-\\
+The remainder of this thesis is organized as follows: \\
 
-\Cref{ch:background} provides theoretical background on tool use in language models, interpretability methods, and the related work that establishes the gap this thesis addresses.
-\\
+\Cref{ch:background} provides theoretical background on tool use in language models, interpretability methods, and the related work that establishes the gap this thesis addresses. \\
 
-\Cref{ch:method} describes the four experiments: behavioral ground truth collection, representational separability measurement, component attribution, and intervention evaluation.
-\\
+\Cref{ch:method} describes the four experiments: behavioral ground truth collection, representational separability measurement, component attribution, and intervention evaluation. \\
 
-\Cref{ch:experimental-setup} details the models, tools, and datasets used.
-\\
+\Cref{ch:experimental-setup} details the models, tools, and datasets used. \\
 
-\Cref{ch:results} presents the results for each research question.
-\\
+\Cref{ch:results} presents the results for each research question. \\
 
-\Cref{ch:discussion} discusses the implications, limitations, and threats to validity.
-\\
+\Cref{ch:discussion} discusses the implications, limitations, and threats to validity. \\
 
 \Cref{ch:conclusion} concludes and outlines future work.
