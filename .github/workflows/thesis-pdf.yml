@@ -1,0 +1,88 @@
+# Builds the thesis with TeX Live + biber on every push to main (and on PRs
+# as a compile check) and publishes build/main.pdf to GitHub Pages.
+#
+# One manual step is needed once: repo Settings -> Pages -> Build and
+# deployment -> Source -> "GitHub Actions".
+#
+# This mirrors scripts/build.sh (pdflatex -> biber -> pdflatex -> pdflatex).
+# Local builds keep using MiKTeX; CI uses TeX Live. latexmk is not involved.
+
+name: Build thesis PDF
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install TeX Live and biber
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y texlive-latex-recommended texlive-latex-extra texlive-pictures texlive-fonts-recommended texlive-bibtex-extra biber
+
+      - name: Compile thesis
+        run: |
+          mkdir -p build
+          FLAGS="-synctex=1 -interaction=nonstopmode -halt-on-error -file-line-error -output-directory=build"
+          pdflatex $FLAGS main.tex
+          biber --input-directory=build --output-directory=build main
+          pdflatex $FLAGS main.tex
+          pdflatex $FLAGS main.tex
+          ls -l build/main.pdf
+
+      - name: Prepare Pages site
+        run: |
+          mkdir -p public
+          cp build/main.pdf public/main.pdf
+          SHA_SHORT=$(git rev-parse --short HEAD)
+          BUILD_DATE=$(date -u +"%Y-%m-%d %H:%M UTC")
+          cat > public/index.html <<EOF
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>IKT590 Master's Thesis - latest PDF</title>
+          </head>
+          <body>
+          <h1>IKT590 Master's Thesis</h1>
+          <p>Latest built PDF, updated on every push to main.</p>
+          <p><a href="main.pdf">Open main.pdf</a></p>
+          <p><small>Built $BUILD_DATE from commit $SHA_SHORT.</small></p>
+          </body>
+          </html>
+          EOF
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: public
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
